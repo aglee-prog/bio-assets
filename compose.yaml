@@ -3,7 +3,7 @@ services:
     build: .
     image: bio-assets:local
     ports:
-      - "127.0.0.1:8092:8092"
+      - "8092:8092"
     volumes:
       - bio-assets-data:/data
     environment:
