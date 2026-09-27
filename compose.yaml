@@ -1,0 +1,28 @@
+services:
+  bio-assets:
+    build: .
+    image: bio-assets:local
+    ports:
+      - "127.0.0.1:8092:8092"
+    volumes:
+      - bio-assets-data:/data
+    environment:
+      BIO_ASSETS_DATA: /data
+      RUST_LOG: bio_assets=info
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8092/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+
+volumes:
+  bio-assets-data:
