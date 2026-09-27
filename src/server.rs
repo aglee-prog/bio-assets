@@ -160,7 +160,8 @@ pub async fn serve(library: Library, address: SocketAddr) -> Result<()> {
         StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
     };
     let cancel = tokio_util::sync::CancellationToken::new();
-    let mut config = StreamableHttpServerConfig::default();
+    let mut config = StreamableHttpServerConfig::default().disable_allowed_hosts();
+
     config.cancellation_token = cancel.child_token();
     let service = StreamableHttpService::new(
         move || Ok(AssetServer::new(library.clone())),
