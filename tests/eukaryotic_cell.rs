@@ -195,11 +195,11 @@ async fn start() -> Server {
 
 /// End-to-end regression test for the eukaryotic-cell scenario:
 ///   1. Store nucleus + mitochondrion + Golgi assets
-///   2. Assert tool list (4 tools, no get_composed)
+///   2. Assert tool list (2 tools: search_assets + compose_svg, no
+///      get_asset/get_assets/get_composed)
 ///   3. search_assets for "organelle cell"
-///   4. get_assets (no include_svg)
-///   5. compose_svg → HTTP GET → XML parse
-///   6. Determinism: same args → same result_id + bytes
+///   4. compose_svg → HTTP GET → XML parse
+///   5. Determinism: same args → same result_id + bytes
 #[tokio::test]
 async fn eukaryotic_cell_end_to_end() {
     let srv = start().await;
@@ -213,14 +213,16 @@ async fn eukaryotic_cell_end_to_end() {
     )
     .await;
     let tools = tools_resp["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 4, "exactly 4 tools");
+    assert_eq!(tools.len(), 2, "exactly 2 tools");
     let names: Vec<String> = tools
         .iter()
         .map(|t| t["name"].as_str().unwrap().to_string())
         .collect();
-    for expected in ["search_assets", "get_asset", "get_assets", "compose_svg"] {
+    for expected in ["search_assets", "compose_svg"] {
         assert!(names.contains(&expected.to_string()), "missing tool {expected}; got {names:?}");
     }
+    assert!(!names.contains(&"get_asset".to_string()), "get_asset must not be present");
+    assert!(!names.contains(&"get_assets".to_string()), "get_assets must not be present");
     assert!(!names.contains(&"get_composed".to_string()), "get_composed must not be present");
 
     // ── 2. search_assets ───────────────────────────────────────────────
@@ -254,67 +256,7 @@ async fn eukaryotic_cell_end_to_end() {
         "expected mitochondrion or golgi in search results; got {found_ids:?}"
     );
 
-    // ── 3. get_assets (no include_svg) ─────────────────────────────────
-    let get_resp = call(
-        &srv.client,
-        &srv.url,
-        &srv.session,
-        json!({"jsonrpc":"2.0","id":12,"method":"tools/call","params":{
-            "name":"get_assets",
-            "arguments":{"ids":["test:cell-nucleus","test:cell-mitochondrion","test:cell-golgi"]}
-        }}),
-    )
-    .await;
-    let get_text = get_resp["result"]["content"][0]["text"].as_str().unwrap();
-    let get_data: Value = serde_json::from_str(get_text).unwrap();
-    // No SVG markers in the raw MCP response.
-    for marker in ["<svg", "<path", "<ellipse"] {
-        assert!(
-            !get_text.contains(marker),
-            "get_assets must not leak SVG markers — found {marker:?} in: {get_text}"
-        );
-    }
-    let assets = get_data["assets"].as_array().expect("assets must be an array");
-    assert_eq!(assets.len(), 3, "three assets returned");
-    assert!(
-        get_data["errors"].as_array().unwrap().is_empty(),
-        "no errors expected; got {:?}",
-        get_data["errors"]
-    );
-    for asset in assets {
-        assert!(
-            asset.get("svg").is_none(),
-            "svg field must be absent (include_svg default=false); asset: {}",
-            asset["id"]
-        );
-        assert!(
-            asset.get("view_box").is_some(),
-            "view_box must be present for {}",
-            asset["id"]
-        );
-        assert!(
-            asset.get("width").is_some(),
-            "width must be present for {}",
-            asset["id"]
-        );
-        assert!(
-            asset.get("height").is_some(),
-            "height must be present for {}",
-            asset["id"]
-        );
-        assert!(
-            asset.get("license").is_some(),
-            "license must be present for {}",
-            asset["id"]
-        );
-        assert!(
-            asset.get("attribution").is_some(),
-            "attribution must be present for {}",
-            asset["id"]
-        );
-    }
-
-    // ── 4. compose_svg ─────────────────────────────────────────────────
+    // ── 3. compose_svg ─────────────────────────────────────────────────
     let compose_resp = call(
         &srv.client,
         &srv.url,
@@ -380,7 +322,7 @@ async fn eukaryotic_cell_end_to_end() {
         );
     }
 
-    // ── 5. HTTP GET the composed SVG ───────────────────────────────────
+    // ── 4. HTTP GET the composed SVG ───────────────────────────────────
     let root = srv.url.trim_end_matches("/mcp");
     let resp = srv
         .client
@@ -444,7 +386,7 @@ async fn eukaryotic_cell_end_to_end() {
         "background rect must be present"
     );
 
-    // ── 6. Determinism ─────────────────────────────────────────────────
+    // ── 5. Determinism ─────────────────────────────────────────────────
     let compose_resp2 = call(
         &srv.client,
         &srv.url,

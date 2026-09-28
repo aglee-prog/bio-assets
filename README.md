@@ -1,8 +1,9 @@
 # bio-assets
 
-A small Rust MCP service for reusable scientific SVG primitives. Find an asset,
-retrieve its SVG and credits, and let the LLM compose the figure. Search and
-retrieval use only local files and SQLite FTS5. There is no renderer, scene model,
+A small Rust MCP service for reusable scientific SVG primitives. Search for
+assets, compose the figure deterministically with `compose_svg`, and present
+the artifact URL to the user. Raw asset SVG is never returned through an MCP
+tool. Search and retrieval use only local files and SQLite FTS5. There is no renderer, scene model,
 layout engine, biological database, or embedding service.
 
 ## Container
@@ -44,13 +45,11 @@ the container is configured to allow the `Host` names `host.docker.internal` and
 
 ## API
 
-Four tools are exposed:
+Two tools are exposed:
 
 | Tool | Arguments | Result |
 | --- | --- | --- |
 | `search_assets` | `query`, optional `source`, `category`, `limit` (default 20, maximum 100) | Array of `{id,name,source,category,tags}` |
-| `get_asset` | `id`, optional `include_svg` (default `false`) | `{id,name,source,view_box,width,height,license,license_url,author,attribution,source_url}`; `svg` is included only when `include_svg` is explicitly `true` (debugging) |
-| `get_assets` | `ids` (1–100), optional `include_svg` (default `false`) | `{assets:[…],errors:[{id,code,message}]}`; `svg` is included only when `include_svg` is `true` |
 | `compose_svg` | `width`, `height`, optional `background`, `elements` (1–50; each an asset `{asset_id,x,y,scale,rotation}` or a native `text`/`line`/`rect`/`circle`, an untagged union by required fields) | `{status,result_id,url,mime_type,width,height}` (no SVG markup); `status` is `"ok"` on success |
 
 Composed SVG never travels through an MCP tool result. It is delivered through a
@@ -60,11 +59,8 @@ read-only HTTP endpoint: `GET /results/{result_id}.svg` → `200` with
 unknown IDs, extra path segments and malformed names all get `404`. There is no
 directory listing and no HTTP write path.
 
-Batch successes retain request order, including repeated IDs. Missing or unreadable
-items produce explicit errors; they do not trigger remote lookups. When
-`include_svg` is `true`, a batch is limited to 64 MiB of SVG markup and a single
-SVG to 16 MiB; oversized batch items are reported for separate retrieval. Search
-results and default asset retrieval contain no SVG markup.
+No MCP tool result ever contains SVG markup: search returns compact metadata
+and compose returns only the compact result object.
 
 Search requires all query words and ranks matches with FTS5 BM25, favoring names
 and tags. Source and category are exact filters. Queries are tokenized as literal
@@ -72,13 +68,13 @@ words rather than executed as raw FTS syntax. A small `src/synonyms.json` adds
 search aliases, including RTK/receptor tyrosine kinase/membrane receptor; this is
 not an ontology. Broad aliases do not reclassify every membrane receptor as RTK.
 
-Each tool supplies attribution metadata with the asset; an extra attribution
-tool is unnecessary for the initial API.
+Attribution for placed assets is embedded in the composed artifact as an
+`<!-- attribution: ... -->` comment.
 
 ## Composition
 
-The flow: `search_assets` → `get_asset` (metadata by default) → `compose_svg`
-→ present the artifact `url` to the user. After a successful composition the
+The flow: `search_assets` → `compose_svg` → present the artifact `url` to the
+user. After a successful composition the
 caller presents the artifact URL; the generated SVG must not be fetched or
 inspected by the model.
 Each placed asset is anchored at its own `viewBox` origin; the transform is
@@ -276,11 +272,10 @@ docker compose run --rm -v /absolute/export:/import:ro bio-assets \
 ```
 
 The integration test starts the real HTTP MCP transport, initializes a client,
-lists exactly four tools, searches, retrieves metadata (no SVG by default),
-exercises partial batch failure, composes, fetches the artifact over the
+lists exactly two tools, searches, composes, fetches the artifact over the
 `GET /results/{result_id}.svg` endpoint, rejects traversal and malformed result
-IDs, and checks argument validation using locally generated fixtures. Other
-tests cover FTS updates, aliases, source filters, SVG reference rewriting,
-unsafe inputs, NIAID variants, and SciDraw coauthors. The `compose` test drives
-a composition round-trip (compose then read the stored artifact) and extends
-the HTTP tests with `include_svg` checks on `get_asset`/`get_assets`.
+IDs, checks argument validation using locally generated fixtures, and confirms
+no MCP tool response contains raw SVG markup. Other tests cover FTS updates,
+aliases, source filters, SVG reference rewriting, unsafe inputs, NIAID
+variants, and SciDraw coauthors. The `compose` test drives a composition
+round-trip (compose then read the stored artifact).

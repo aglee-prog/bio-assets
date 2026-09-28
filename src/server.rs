@@ -28,32 +28,6 @@ pub struct SearchArgs {
 fn default_limit() -> u32 {
     20
 }
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct GetArgs {
-    #[schemars(length(min = 1))]
-    pub id: String,
-    /// Include the full SVG markup. Default is false (metadata + geometry only);
-    /// set true explicitly only for debugging.
-    #[serde(default = "default_false")]
-    pub include_svg: bool,
-}
-fn default_false() -> bool {
-    false
-}
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct BatchArgs {
-    #[schemars(length(min = 1, max = 100))]
-    pub ids: Vec<String>,
-    /// Include the full SVG markup for every asset. Default is false (metadata
-    /// + geometry only).
-    ///
-    /// When `include_svg` is false, the 64 MiB cumulative SVG guard does not
-    /// apply.
-    #[serde(default = "default_false")]
-    pub include_svg: bool,
-}
 
 #[derive(Clone)]
 pub struct AssetServer {
@@ -107,89 +81,6 @@ impl AssetServer {
         })
     }
     #[tool(
-        description = "Return a local SVG primitive with its full license, author and attribution. Different assets have prefixed internal IDs. Rename IDs again when embedding multiple copies of one asset. No network access.",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn get_asset(
-        &self,
-        Parameters(args): Parameters<GetArgs>,
-    ) -> Result<CallToolResult, ErrorData> {
-        let lib = self.library.clone();
-        Ok(match tokio::task::spawn_blocking(move || -> anyhow::Result<Option<Value>> {
-            let Some(asset) = lib.get(&args.id)? else {
-                return Ok(None);
-            };
-            let mut value = serde_json::to_value(asset)?;
-            if !args.include_svg && let Some(object) = value.as_object_mut() {
-                object.remove("svg");
-            }
-            Ok(Some(value))
-        })
-        .await
-        {
-            Ok(Ok(Some(value))) => result(value),
-            Ok(Ok(None)) => failure("ASSET_NOT_FOUND"),
-            Ok(Err(e)) => failure(e),
-            Err(e) => failure(e),
-        })
-    }
-    #[tool(
-        description = "Retrieve up to 100 local SVG primitives in one call. Returns assets in request order and explicit errors for missing items. Includes licensing and attribution for every asset. No network access.",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn get_assets(
-        &self,
-        Parameters(args): Parameters<BatchArgs>,
-    ) -> Result<CallToolResult, ErrorData> {
-        if args.ids.is_empty() || args.ids.len() > 100 {
-            return Ok(failure("ids must contain 1..100 items"));
-        }
-        let lib = self.library.clone();
-        Ok(match tokio::task::spawn_blocking(move || {
-            let mut assets = Vec::new();
-            let mut errors = Vec::new();
-            let mut size = 0;
-            for id in args.ids {
-                match lib.get(&id) {
-                    Ok(Some(asset)) => {
-                        if args.include_svg {
-                            if size + asset.svg.len() > 64 * 1024 * 1024 {
-                                errors.push(json!({"id":id,"code":"BATCH_TOO_LARGE","message":"64 MiB SVG batch limit; retrieve this asset separately"}));
-                            } else {
-                                size += asset.svg.len();
-                                assets.push(serde_json::to_value(&asset).expect("AssetContent is serializable"));
-                            }
-                        } else {
-                            let mut value = serde_json::to_value(&asset).expect("AssetContent is serializable");
-                            if let Some(object) = value.as_object_mut() {
-                                object.remove("svg");
-                            }
-                            assets.push(value);
-                        }
-                    }
-                    Ok(None) => errors.push(json!({"id":id,"code":"ASSET_NOT_FOUND","message":"Asset is not in the local index"})),
-                    Err(e) => errors.push(json!({"id":id,"code":"READ_FAILED","message":e.to_string()})),
-                }
-            }
-            json!({"assets": assets, "errors": errors})
-        })
-        .await
-        {
-            Ok(v) => result(v),
-            Err(e) => failure(e),
-        })
-    }
-    #[tool(
         description = "Deterministically compose a scene of elements onto a canvas. Each element is an untagged union discriminated by which required fields are present (no `type` key); only the listed required fields are mandatory, the rest have defaults, and asset placement is unchanged. Examples — asset: {\"asset_id\":\"sci:neuron\",\"x\":10,\"y\":20,\"scale\":2,\"rotation\":15}; text: {\"text\":\"Hi & <ok>\",\"x\":10,\"y\":10,\"font_size\":16,\"anchor\":\"middle\",\"fill\":\"#000000\"}; line: {\"x1\":0,\"y1\":0,\"x2\":50,\"y2\":25,\"width\":2,\"stroke\":\"#000\",\"arrow_end\":true}; rect: {\"x\":0,\"y\":0,\"width\":40,\"height\":20,\"rx\":4,\"fill\":\"#fff\",\"stroke\":\"#000\",\"stroke_width\":1}; circle: {\"cx\":20,\"cy\":20,\"r\":10,\"fill\":\"#f00\",\"stroke\":\"#000\",\"stroke_width\":2}. Each asset is anchored at its own viewBox origin; scaling is a transform (width/height stay the raw viewBox size). Returns a compact result (status, result_id, url, mime_type, width, height) and never SVG markup; the url is the artifact location, relative by default and absolute when a public base URL is configured. After a successful composition, present the returned url to the user; do not fetch or inspect the generated SVG. No network access.",
         annotations(
             read_only_hint = false,
@@ -216,7 +107,7 @@ impl ServerHandler for AssetServer {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(rmcp::model::Implementation::new("bio-assets", env!("CARGO_PKG_VERSION")))
-            .with_instructions("Search scientific visual primitives, then either retrieve an asset's SVG and compose it yourself, or use the deterministic composer. Recommended flow: search_assets -> get_asset (metadata by default, with source/view_box/width/height; set include_svg=true only for debugging) -> compose_svg to place assets (by id + x/y/scale/rotation) or native text/line/rect/circle elements (each an untagged union discriminated by required fields; assets anchored at their own viewBox origin; returns a result_id and an artifact url, never markup) -> present the returned artifact url to the user; do not fetch or inspect the generated SVG. This service is offline and does not render or lay out figures beyond fixed geometry.")
+            .with_instructions("Search scientific visual primitives, then use the deterministic composer to build the figure. Recommended flow: search_assets -> compose_svg to place assets (by id + x/y/scale/rotation) or native text/line/rect/circle elements (each an untagged union discriminated by required fields; assets anchored at their own viewBox origin; returns a result_id and an artifact url, never markup) -> present the returned artifact url to the user; do not fetch or inspect the generated SVG. Raw asset SVG is never returned by any tool; compose_svg resolves assets internally. This service is offline and does not render or lay out figures beyond fixed geometry.")
     }
 }
 

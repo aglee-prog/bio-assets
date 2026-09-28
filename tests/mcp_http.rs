@@ -1,6 +1,10 @@
 use bio_assets::{index::Library, models::Asset, server};
 use serde_json::{Value, json};
 
+/// Fixture SVG for the `test:neuron` asset stored by [`start`].
+const NEURON_SVG: &str =
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'><path d='M0 0L10 10'/></svg>";
+
 fn wire_json(body: &str) -> Value {
     if let Ok(value) = serde_json::from_str(body) {
         return value;
@@ -63,11 +67,7 @@ async fn start() -> Server {
         source_revision: None,
     };
     library
-        .store(
-            &asset,
-            b"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'><path d='M0 0L10 10'/></svg>",
-            &json!({}),
-        )
+        .store(&asset, NEURON_SVG.as_bytes(), &json!({}))
         .unwrap();
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
@@ -119,7 +119,7 @@ async fn start() -> Server {
 }
 
 #[tokio::test]
-async fn real_http_initialize_search_get_batch_and_validation() {
+async fn real_http_initialize_search_and_validation() {
     let srv = start().await;
     let tools = call(
         &srv.client,
@@ -128,56 +128,62 @@ async fn real_http_initialize_search_get_batch_and_validation() {
         json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
     )
     .await;
-    assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 4);
+    assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 2);
     let tool_names: Vec<String> = tools["result"]["tools"].as_array().unwrap()
         .iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
     assert!(tool_names.contains(&"search_assets".to_string()));
-    assert!(tool_names.contains(&"get_asset".to_string()));
-    assert!(tool_names.contains(&"get_assets".to_string()));
     assert!(tool_names.contains(&"compose_svg".to_string()));
+    assert!(!tool_names.contains(&"get_asset".to_string()), "get_asset must be gone: {tool_names:?}");
+    assert!(!tool_names.contains(&"get_assets".to_string()), "get_assets must be gone: {tool_names:?}");
     assert!(!tool_names.contains(&"get_composed".to_string()), "get_composed must be gone: {tool_names:?}");
     let search = call(&srv.client,&srv.url,&srv.session,json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_assets","arguments":{"query":"nerve cell"}}})).await;
     let data: Value =
         serde_json::from_str(search["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
     assert_eq!(data[0]["id"], "test:neuron");
     assert!(data[0].get("svg").is_none());
-    let get = call(&srv.client,&srv.url,&srv.session,json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_asset","arguments":{"id":"test:neuron"}}})).await;
-    let data: Value =
-        serde_json::from_str(get["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
-    assert_eq!(data["license"], "CC0-1.0");
-    assert!(data.get("svg").is_none(), "get_asset defaults to include_svg=false (no svg)");
-    assert!(data.get("view_box").is_some(), "view_box must be present");
-    assert!(data.get("width").is_some(), "width must be present");
-    assert!(data.get("height").is_some(), "height must be present");
-    let batch = call(&srv.client,&srv.url,&srv.session,json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"get_assets","arguments":{"ids":["test:missing","test:neuron"]}}})).await;
-    let data: Value =
-        serde_json::from_str(batch["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
-    assert_eq!(data["errors"][0]["code"], "ASSET_NOT_FOUND");
-    assert_eq!(data["assets"][0]["author"], "Test Author");
-    assert!(data["assets"][0].get("svg").is_none(), "get_assets defaults to include_svg=false");
-    let invalid = call(&srv.client,&srv.url,&srv.session,json!({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"search_assets","arguments":{"query":"neuron","limit":0}}})).await;
+    let invalid = call(&srv.client,&srv.url,&srv.session,json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"search_assets","arguments":{"query":"neuron","limit":0}}})).await;
     assert!(invalid["result"]["isError"] == true || invalid.get("error").is_some());
 }
 
 #[tokio::test]
-async fn get_asset_honors_include_svg_flag() {
+async fn raw_svg_cannot_be_retrieved_through_mcp_tools() {
     let srv = start().await;
-    // Omitted include_svg now defaults to false: metadata only, no svg field.
-    let meta = call(&srv.client,&srv.url,&srv.session,json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_asset","arguments":{"id":"test:neuron"}}})).await;
-    let data: Value =
-        serde_json::from_str(meta["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
-    assert!(data.get("svg").is_none(), "include_svg omitted => no svg field");
-    assert!(data.get("view_box").is_some(), "view_box must be present");
-    assert!(data.get("width").is_some(), "width must be present");
-    assert!(data.get("height").is_some(), "height must be present");
-    assert!(data.get("source").is_some(), "source must be present");
-    assert!(data.get("attribution").is_some(), "attribution must be present");
-    // include_svg=true (debug path): the full SVG is returned.
-    let with_svg = call(&srv.client,&srv.url,&srv.session,json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"get_asset","arguments":{"id":"test:neuron","include_svg":true}}})).await;
-    let data: Value =
-        serde_json::from_str(with_svg["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
-    assert!(data["svg"].as_str().is_some(), "include_svg:true => svg present");
-    assert!(data["svg"].as_str().unwrap().contains("viewBox"), "svg must contain viewBox");
+    // Every exposed tool, called with valid arguments, must return a
+    // successful response that leaks neither the fixture SVG nor any markup.
+    let tools = call(
+        &srv.client,
+        &srv.url,
+        &srv.session,
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
+    )
+    .await;
+    let tool_names: Vec<String> = tools["result"]["tools"].as_array().unwrap()
+        .iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
+    assert_eq!(tool_names.len(), 2, "expected exactly 2 exposed tools: {tool_names:?}");
+    for (i, name) in tool_names.iter().enumerate() {
+        let arguments = match name.as_str() {
+            "search_assets" => json!({"query":"nerve cell"}),
+            "compose_svg" => json!({"width":100,"height":100,"elements":[{"asset_id":"test:neuron","x":5,"y":5,"scale":2,"rotation":0}]}),
+            other => panic!("unexpected tool in tools/list: {other:?}; add valid arguments to this test"),
+        };
+        let response = call(&srv.client,&srv.url,&srv.session,json!({"jsonrpc":"2.0","id":10+i,"method":"tools/call","params":{"name":name,"arguments":arguments}})).await;
+        let result = &response["result"];
+        assert!(
+            result.get("isError").is_none() || result["isError"] == false,
+            "{name} call must succeed: {response}"
+        );
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(
+            !text.contains(NEURON_SVG),
+            "{name} must not return the raw asset SVG: {text}"
+        );
+        for marker in ["<svg", "<path", "<symbol", "<use", "viewBox"] {
+            assert!(
+                !text.contains(marker),
+                "{name} must not leak markup marker {marker:?}: {text}"
+            );
+        }
+    }
 }
 
 #[tokio::test]
@@ -303,22 +309,4 @@ async fn compose_same_args_twice_same_result_id_and_bytes() {
     let b1 = std::fs::read(srv.dir.path().join("results").join(format!("{id1}.svg"))).unwrap();
     let b2 = std::fs::read(srv.dir.path().join("results").join(format!("{id2}.svg"))).unwrap();
     assert_eq!(b1, b2, "stored bytes must be identical");
-}
-
-#[tokio::test]
-async fn get_assets_honors_include_svg_flag() {
-    let srv = start().await;
-    // default (omitted) => no svg field, but geometry/metadata remain
-    let meta = call(&srv.client,&srv.url,&srv.session,json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_assets","arguments":{"ids":["test:neuron"]}}})).await;
-    let data: Value =
-        serde_json::from_str(meta["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
-    assert!(data["assets"][0].get("svg").is_none(), "get_assets default => no svg field");
-    assert!(data["assets"][0].get("view_box").is_some(), "view_box must be present");
-    assert!(data["assets"][0].get("width").is_some(), "width must be present");
-    assert!(data["assets"][0].get("height").is_some(), "height must be present");
-    // include_svg=true => svg present
-    let with_svg = call(&srv.client,&srv.url,&srv.session,json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"get_assets","arguments":{"ids":["test:neuron"],"include_svg":true}}})).await;
-    let data: Value =
-        serde_json::from_str(with_svg["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
-    assert!(data["assets"][0]["svg"].as_str().is_some(), "include_svg:true => svg present");
 }
