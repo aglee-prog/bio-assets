@@ -22,7 +22,7 @@ impl Library {
         Self { root: root.into() }
     }
     pub fn initialize(&self) -> Result<()> {
-        for dir in ["assets", "data/manifests", "data/normalized", "data/composed", "cache"] {
+        for dir in ["assets", "data/manifests", "data/normalized", "results", "cache"] {
             fs::create_dir_all(self.root.join(dir))?;
         }
         let db = Connection::open(self.root.join("data/assets.sqlite"))?;
@@ -177,7 +177,7 @@ impl Library {
     }
 
     /// Deterministically compose placed assets: resolve them, build the SVG, and
-    /// write it to `data/composed/{result_id}.svg`. Fails before writing if any
+    /// write it to `results/{result_id}.svg`. Fails before writing if any
     /// asset is missing or invalid (all-or-nothing).
     pub fn compose(&self, args: &ComposeArgs) -> Result<ComposeResult> {
         let resolve = |asset_id: &str| -> Result<PlacedAsset> {
@@ -195,13 +195,15 @@ impl Library {
         atomic_write(
             &self
                 .root
-                .join("data/composed")
+                .join("results")
                 .join(format!("{result_id}.svg")),
             &svg,
         )?;
         let attribution = compose::attribution(args, &resolve)?;
         Ok(ComposeResult {
-            result_id,
+            result_id: result_id.clone(),
+            url: format!("/results/{result_id}.svg"),
+            mime_type: "image/svg+xml".into(),
             width: args.width,
             height: args.height,
             element_count: args.elements.len(),
@@ -209,24 +211,20 @@ impl Library {
         })
     }
 
-    /// Return the stored composed SVG for a `result_id` produced by `compose`.
-    pub fn get_composed(&self, result_id: &str) -> Result<String> {
+    /// Return the stored composed SVG bytes for a `result_id` produced by
+    /// `compose`, read only from `<root>/results/`. Enforces the strict id
+    /// format; a missing artifact is an error.
+    pub fn read_result(&self, result_id: &str) -> Result<Vec<u8>> {
+        ensure!(is_valid_result_id(result_id), "invalid result id");
+        let path = self.root.join("results").join(format!("{result_id}.svg"));
+        ensure!(path.is_file(), "result not found");
+        let root = self.root.canonicalize()?;
+        let canonical = path.canonicalize()?;
         ensure!(
-            result_id.starts_with("ba_comp_") && result_id.len() == "ba_comp_".len() + 16,
-            "invalid result id"
+            canonical.starts_with(&root),
+            "result path escapes library root"
         );
-        ensure!(
-            result_id
-                .chars()
-                .skip("ba_comp_".len())
-                .all(|c| c.is_ascii_hexdigit()),
-            "invalid result id"
-        );
-        let path = contained_path(
-            &self.root,
-            Path::new(&format!("data/composed/{result_id}.svg")),
-        )?;
-        Ok(fs::read_to_string(path)?)
+        Ok(fs::read(&canonical)?)
     }
 }
 
@@ -252,6 +250,15 @@ fn view_box_of(svg: &str) -> Result<[f64; 4]> {
         "invalid viewBox"
     );
     Ok([parts[0], parts[1], parts[2], parts[3]])
+}
+
+/// Strict result-id format: `ba_comp_` + exactly 16 lowercase hex chars.
+pub fn is_valid_result_id(result_id: &str) -> bool {
+    const PREFIX: &str = "ba_comp_";
+    let Some(hex) = result_id.strip_prefix(PREFIX) else {
+        return false;
+    };
+    hex.len() == 16 && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 pub fn contained_path(root: &Path, path: &Path) -> Result<PathBuf> {

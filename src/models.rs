@@ -79,11 +79,13 @@ pub struct ComposeArgs {
     pub elements: Vec<ComposeElement>,
 }
 
-/// Compact, deterministic composition result. Carries no SVG markup; retrieve
-/// the artifact with `get_composed` using `result_id`.
+/// Compact, deterministic composition result. Carries no SVG markup; the
+/// artifact is fetched with a plain HTTP `GET` on the relative `url`.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ComposeResult {
     pub result_id: String,
+    pub url: String,
+    pub mime_type: String,
     pub width: f64,
     pub height: f64,
     pub element_count: usize,

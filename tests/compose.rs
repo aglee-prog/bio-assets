@@ -15,7 +15,7 @@ struct ManifestEntry {
 }
 
 /// A tempdir-backed `Library` with every fixture stored as an asset. The tempdir
-/// is held so the on-disk state (including `data/composed/`) outlives the test.
+/// is held so the on-disk state (including `results/`) outlives the test.
 struct Harness {
     #[allow(dead_code)]
     dir: tempfile::TempDir,
@@ -79,7 +79,8 @@ fn single(asset_id: &str) -> ComposeArgs {
 
 fn composed_text(lib: &Library, args: &ComposeArgs) -> String {
     let result = lib.compose(args).expect("compose must succeed");
-    lib.get_composed(&result.result_id).expect("stored artifact readable")
+    String::from_utf8(lib.read_result(&result.result_id).expect("stored artifact readable"))
+        .expect("composed SVG is UTF-8")
 }
 
 fn symbol_ids(svg: &str) -> Vec<String> {
@@ -115,9 +116,9 @@ fn determinism_same_id_and_bytes() {
     let r1 = h.lib.compose(&args).unwrap();
     let r2 = h.lib.compose(&args).unwrap();
     assert_eq!(r1.result_id, r2.result_id, "identical args must give the same result_id");
-    let b1 = h.lib.get_composed(&r1.result_id).unwrap();
-    let b2 = h.lib.get_composed(&r2.result_id).unwrap();
-    assert_eq!(b1, b2, "get_composed must return identical bytes");
+    let b1 = h.lib.read_result(&r1.result_id).unwrap();
+    let b2 = h.lib.read_result(&r2.result_id).unwrap();
+    assert_eq!(b1, b2, "read_result must return identical bytes");
 }
 
 #[test]
@@ -302,7 +303,7 @@ fn construct_marker(construct: &str) -> Option<&'static str> {
 #[test]
 fn all_or_nothing_missing_asset_no_file() {
     let h = new_harness();
-    let composed_dir = h.dir.path().join("data/composed");
+    let composed_dir = h.dir.path().join("results");
     let before: usize = fs::read_dir(&composed_dir)
         .map(|d| d.count())
         .unwrap_or(0);
@@ -317,7 +318,7 @@ fn all_or_nothing_missing_asset_no_file() {
     let after: usize = fs::read_dir(&composed_dir)
         .map(|d| d.count())
         .unwrap_or(0);
-    assert_eq!(before, after, "a failed composition must not write any file into data/composed");
+    assert_eq!(before, after, "a failed composition must not write any file into results/");
 }
 
 #[test]
@@ -366,18 +367,36 @@ fn bounds_rejections() {
 }
 
 #[test]
-fn get_composed_exact_bytes_and_unknown_error() {
+fn read_result_exact_bytes_and_unknown_error() {
     let h = new_harness();
     let args = single(&h.ids[0]);
     let result = h.lib.compose(&args).unwrap();
-    let on_disk = fs::read(h.dir.path().join("data/composed").join(format!("{}.svg", result.result_id))).unwrap();
-    let via_api = h.lib.get_composed(&result.result_id).unwrap().into_bytes();
-    assert_eq!(on_disk, via_api, "get_composed must return the exact stored bytes");
+    let on_disk = fs::read(h.dir.path().join("results").join(format!("{}.svg", result.result_id))).unwrap();
+    let via_api = h.lib.read_result(&result.result_id).unwrap();
+    assert_eq!(on_disk, via_api, "read_result must return the exact stored bytes");
     // unknown but well-formed result id => error
-    let unknown = h.lib.get_composed("ba_comp_0000000000000000");
+    let unknown = h.lib.read_result("ba_comp_0000000000000000");
     assert!(unknown.is_err(), "unknown result_id must be an error");
     // malformed result id => error
-    assert!(h.lib.get_composed("not-a-result-id").is_err(), "malformed result_id must be an error");
+    assert!(h.lib.read_result("not-a-result-id").is_err(), "malformed result_id must be an error");
+}
+
+#[cfg(unix)]
+#[test]
+fn read_result_refuses_symlink_escaping_root() {
+    let h = new_harness();
+    // A file in a separate directory, outside the library root.
+    let outside_dir = tempfile::tempdir().unwrap();
+    let outside = outside_dir.path().join("outside-artifact.svg");
+    fs::write(&outside, b"<svg xmlns='http://www.w3.org/2000/svg'>SECRET</svg>").unwrap();
+    // A well-formed result id whose on-disk entry is a symlink escaping the root.
+    let id = "ba_comp_0123456789abcdef";
+    let link = h.dir.path().join("results").join(format!("{id}.svg"));
+    std::os::unix::fs::symlink(&outside, &link).unwrap();
+    assert!(
+        h.lib.read_result(id).is_err(),
+        "a symlink escaping the library root must not be served"
+    );
 }
 
 #[test]

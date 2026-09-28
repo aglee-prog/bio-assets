@@ -17,11 +17,13 @@ type Resolver<'a> = dyn Fn(&str) -> Result<PlacedAsset> + 'a;
 
 /// Deterministically build a composed SVG from `args`. `resolve` maps an asset
 /// id to its normalized content; any failure (missing/invalid asset) aborts
-/// before any file is written (all-or-nothing). Returns `(result_id, svg_bytes)`.
+/// before any file is written (all-or-nothing). Returns `(result_id, svg_bytes)`,
+/// where `result_id` is content-addressed over the final SVG bytes.
 pub fn compose(args: &ComposeArgs, resolve: &Resolver<'_>) -> Result<(String, Vec<u8>)> {
     validate(args)?;
-    let result_id = result_id_of(args);
-    let (svg, _attribution) = build(args, resolve, &result_id)?;
+    let seed = seed_of(args);
+    let (svg, _attribution) = build(args, resolve, &seed)?;
+    let result_id = result_id_of(&svg);
     Ok((result_id, svg))
 }
 
@@ -39,20 +41,27 @@ pub fn attribution(args: &ComposeArgs, resolve: &Resolver<'_>) -> Result<Vec<Str
     Ok(seen)
 }
 
-/// `ba_comp_{sha256(canonical_json(args))[:16]}`. `serde_json::to_string` gives
-/// a fixed field order with no whitespace, so identical args always hash the
-/// same way (and so do the stored bytes).
-fn result_id_of(args: &ComposeArgs) -> String {
+/// `ba_comp_{sha256(svg_bytes)[:16]}`: content-addressed over the final
+/// composed SVG bytes, so identical bytes always yield the same id.
+pub fn result_id_of(svg: &[u8]) -> String {
+    format!("ba_comp_{}", &digest(svg)[..16])
+}
+
+/// The symbol-id seed: `sha256(canonical_json(args))`. `serde_json::to_string`
+/// gives a fixed field order with no whitespace, so identical args always seed
+/// the same way. Derived from the args (not the bytes) because the bytes
+/// themselves embed the symbol ids, which would be circular.
+fn seed_of(args: &ComposeArgs) -> String {
     let canonical = serde_json::to_string(args).expect("ComposeArgs is serializable");
-    let hash = digest(canonical.as_bytes());
-    format!("ba_comp_{}", &hash[..16])
+    digest(canonical.as_bytes())
 }
 
 /// Resolve every element (all-or-nothing), then emit the SVG deterministically.
+/// `seed` is the args-derived symbol-id seed (see `seed_of`).
 fn build(
     args: &ComposeArgs,
     resolve: &Resolver<'_>,
-    result_id: &str,
+    seed: &str,
 ) -> Result<(Vec<u8>, Vec<String>)> {
     let placed: Vec<PlacedAsset> = args
         .elements
@@ -74,7 +83,7 @@ fn build(
             fill = xml_escape(background)
         ));
     }
-    let symbol_prefix = format!("ba_comp_{}", &digest(result_id.as_bytes())[..12]);
+    let symbol_prefix = format!("ba_comp_{}", &seed[..12]);
     for (i, element) in args.elements.iter().enumerate() {
         let asset = &placed[i];
         let [ox, oy, ow, oh] = asset.view_box;
@@ -240,9 +249,14 @@ mod tests {
         let (id2, bytes2) = compose(&args, &resolve).unwrap();
         assert_eq!(id1, id2);
         assert_eq!(bytes1, bytes2);
-        assert_eq!(id1, result_id_of(&args));
+        // content-addressed: the id is derived from the final bytes
+        assert_eq!(id1, result_id_of(&bytes1));
         assert!(id1.starts_with("ba_comp_"));
         assert_eq!(id1.len(), "ba_comp_".len() + 16);
+        assert!(
+            id1["ba_comp_".len()..].chars().all(|c| c.is_ascii_hexdigit()),
+            "id suffix must be 16 hex chars: {id1}"
+        );
     }
 
     #[test]

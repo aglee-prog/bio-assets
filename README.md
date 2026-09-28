@@ -44,20 +44,27 @@ the container is configured to allow the `Host` names `host.docker.internal` and
 
 ## API
 
-Five tools are exposed:
+Four tools are exposed:
 
 | Tool | Arguments | Result |
 | --- | --- | --- |
 | `search_assets` | `query`, optional `source`, `category`, `limit` (default 20, maximum 100) | Array of `{id,name,source,category,tags}` |
-| `get_asset` | `id`, optional `include_svg` (default `true`) | `{id,name,source,view_box,width,height,license,license_url,author,attribution,source_url}`; `svg` is omitted when `include_svg` is `false` |
-| `get_assets` | `ids` (1–100) | `{assets:[…],errors:[{id,code,message}]}` |
-| `compose_svg` | `width`, `height`, optional `background`, `elements` (1–50; each `{asset_id,x,y,scale,rotation}`) | `{result_id,width,height,element_count,attribution}` (no SVG markup) |
-| `get_composed` | `result_id` | `{result_id,svg}` (the full composed SVG) |
+| `get_asset` | `id`, optional `include_svg` (default `false`) | `{id,name,source,view_box,width,height,license,license_url,author,attribution,source_url}`; `svg` is included only when `include_svg` is explicitly `true` (debugging) |
+| `get_assets` | `ids` (1–100), optional `include_svg` (default `false`) | `{assets:[…],errors:[{id,code,message}]}`; `svg` is included only when `include_svg` is `true` |
+| `compose_svg` | `width`, `height`, optional `background`, `elements` (1–50; each `{asset_id,x,y,scale,rotation}`) | `{result_id,url,mime_type,width,height,element_count,attribution}` (no SVG markup) |
+
+Composed SVG never travels through an MCP tool result. It is delivered through a
+read-only HTTP endpoint: `GET /results/{result_id}.svg` → `200` with
+`Content-Type: image/svg+xml` and the stored bytes; no MCP session is required.
+`result_id` must be `ba_comp_` plus 16 lowercase hex chars; traversal attempts,
+unknown IDs, extra path segments and malformed names all get `404`. There is no
+directory listing and no HTTP write path.
 
 Batch successes retain request order, including repeated IDs. Missing or unreadable
-items produce explicit errors; they do not trigger remote lookups. A batch is
-limited to 64 MiB of SVG markup and a single SVG to 16 MiB. Oversized batch items
-are reported for separate retrieval. Search results contain no SVG markup.
+items produce explicit errors; they do not trigger remote lookups. When
+`include_svg` is `true`, a batch is limited to 64 MiB of SVG markup and a single
+SVG to 16 MiB; oversized batch items are reported for separate retrieval. Search
+results and default asset retrieval contain no SVG markup.
 
 Search requires all query words and ranks matches with FTS5 BM25, favoring names
 and tags. Source and category are exact filters. Queries are tokenized as literal
@@ -70,19 +77,22 @@ tool is unnecessary for the initial API.
 
 ## Composition
 
-The flow: `search_assets` → `get_asset` (metadata) → `compose_svg` → `get_composed`.
+The flow: `search_assets` → `get_asset` (metadata by default) → `compose_svg`
+→ `GET /results/{result_id}.svg` (plain HTTP, no MCP call).
 Each placed asset is anchored at its own `viewBox` origin; the transform is
 `translate·scale·rotate` about that origin, with scaling applied through the
 transform so `width` and `height` stay the raw (un-scaled) viewBox size.
 Negative and non-zero origins are preserved.
 
 Identical compose arguments always produce the same `result_id` and the same
-stored bytes (canonical `serde_json::to_string` hash → `ba_comp_` prefix +
-first 16 hex chars). `get_composed` is idempotent.
+stored bytes. `result_id` is content-addressed: `ba_comp_` prefix + first 16
+hex chars of the SHA-256 of the final composed SVG bytes. Re-running
+`compose_svg` with the same arguments reuses the stored artifact (idempotent).
 
-Artifacts live in `data/composed/{result_id}.svg`. Limits: 1–50 elements per
-composition; `scale > 0`; `|rotation| ≤ 360`; canvas `width`/`height` finite
-and greater than zero; assembled SVG ≤ 16 MiB.
+Artifacts live in `results/{result_id}.svg` under the data directory
+(`/data/results/…` in the container). Limits: 1–50 elements per composition;
+`scale > 0`; `|rotation| ≤ 360`; canvas `width`/`height` finite and greater
+than zero; assembled SVG ≤ 16 MiB.
 
 Preserve every attribution returned by `compose_svg` when redistributing a
 composition.
@@ -163,9 +173,10 @@ assets/
   scidraw/<asset-key>/<content-hash>.svg
 data/
   assets.sqlite
-  composed/{result_id}.svg
   manifests/<source>/
   normalized/<asset-key>/<content-hash>.svg
+results/
+  {result_id}.svg
 cache/
   bioicons/
   niaid/
@@ -257,9 +268,11 @@ docker compose run --rm -v /absolute/export:/import:ro bio-assets \
 ```
 
 The integration test starts the real HTTP MCP transport, initializes a client,
-lists exactly five tools, searches, retrieves an SVG with credits, exercises
-partial batch failure, and checks argument validation using locally generated
-fixtures. Other tests cover FTS updates, aliases, source filters, SVG reference
-rewriting, unsafe inputs, NIAID variants, and SciDraw coauthors. The `compose`
-test drives a composition round-trip (compose then retrieve) and extends the
-HTTP tests with `include_svg` checks on `get_asset`.
+lists exactly four tools, searches, retrieves metadata (no SVG by default),
+exercises partial batch failure, composes, fetches the artifact over the
+`GET /results/{result_id}.svg` endpoint, rejects traversal and malformed result
+IDs, and checks argument validation using locally generated fixtures. Other
+tests cover FTS updates, aliases, source filters, SVG reference rewriting,
+unsafe inputs, NIAID variants, and SciDraw coauthors. The `compose` test drives
+a composition round-trip (compose then read the stored artifact) and extends
+the HTTP tests with `include_svg` checks on `get_asset`/`get_assets`.

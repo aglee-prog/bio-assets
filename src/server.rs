@@ -33,25 +33,26 @@ fn default_limit() -> u32 {
 pub struct GetArgs {
     #[schemars(length(min = 1))]
     pub id: String,
-    /// Include the full SVG markup (default). Set false for metadata only.
-    #[serde(default = "default_true")]
+    /// Include the full SVG markup. Default is false (metadata + geometry only);
+    /// set true explicitly only for debugging.
+    #[serde(default = "default_false")]
     pub include_svg: bool,
 }
-fn default_true() -> bool {
-    true
-}
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct GetComposedArgs {
-    /// A `result_id` returned by `compose_svg`.
-    #[schemars(length(min = 1))]
-    pub result_id: String,
+fn default_false() -> bool {
+    false
 }
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BatchArgs {
     #[schemars(length(min = 1, max = 100))]
     pub ids: Vec<String>,
+    /// Include the full SVG markup for every asset. Default is false (metadata
+    /// + geometry only).
+    ///
+    /// When `include_svg` is false, the 64 MiB cumulative SVG guard does not
+    /// apply.
+    #[serde(default = "default_false")]
+    pub include_svg: bool,
 }
 
 #[derive(Clone)]
@@ -155,22 +156,41 @@ impl AssetServer {
         }
         let lib = self.library.clone();
         Ok(match tokio::task::spawn_blocking(move || {
-            let mut assets=Vec::new(); let mut errors=Vec::new(); let mut size=0;
+            let mut assets = Vec::new();
+            let mut errors = Vec::new();
+            let mut size = 0;
             for id in args.ids {
                 match lib.get(&id) {
-                    Ok(Some(asset))=>{
-                        if size+asset.svg.len()>64*1024*1024 {errors.push(json!({"id":id,"code":"BATCH_TOO_LARGE","message":"64 MiB SVG batch limit; retrieve this asset separately"}));}
-                        else {size+=asset.svg.len();assets.push(asset);}
-                    },
-                    Ok(None)=>errors.push(json!({"id":id,"code":"ASSET_NOT_FOUND","message":"Asset is not in the local index"})),
-                    Err(e)=>errors.push(json!({"id":id,"code":"READ_FAILED","message":e.to_string()}))
+                    Ok(Some(asset)) => {
+                        if args.include_svg {
+                            if size + asset.svg.len() > 64 * 1024 * 1024 {
+                                errors.push(json!({"id":id,"code":"BATCH_TOO_LARGE","message":"64 MiB SVG batch limit; retrieve this asset separately"}));
+                            } else {
+                                size += asset.svg.len();
+                                assets.push(serde_json::to_value(&asset).expect("AssetContent is serializable"));
+                            }
+                        } else {
+                            let mut value = serde_json::to_value(&asset).expect("AssetContent is serializable");
+                            if let Some(object) = value.as_object_mut() {
+                                object.remove("svg");
+                            }
+                            assets.push(value);
+                        }
+                    }
+                    Ok(None) => errors.push(json!({"id":id,"code":"ASSET_NOT_FOUND","message":"Asset is not in the local index"})),
+                    Err(e) => errors.push(json!({"id":id,"code":"READ_FAILED","message":e.to_string()})),
                 }
             }
-            json!({"assets":assets,"errors":errors})
-        }).await {Ok(v)=>result(v),Err(e)=>failure(e)})
+            json!({"assets": assets, "errors": errors})
+        })
+        .await
+        {
+            Ok(v) => result(v),
+            Err(e) => failure(e),
+        })
     }
     #[tool(
-        description = "Deterministically place local assets by asset_id and x/y/scale/rotation onto a canvas. Each asset is anchored at its own viewBox origin; scaling is a transform (width/height stay the raw viewBox size). Returns a compact result id, never SVG markup; retrieve it with get_composed. Preserve every returned attribution. No network access.",
+        description = "Deterministically place local assets by asset_id and x/y/scale/rotation onto a canvas. Each asset is anchored at its own viewBox origin; scaling is a transform (width/height stay the raw viewBox size). Returns a compact result (result_id plus a relative url) and never SVG markup. Fetch the composed SVG by performing a plain HTTP GET on the returned url (not an MCP call). Preserve every returned attribution. No network access.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -189,27 +209,6 @@ impl AssetServer {
             Err(e) => failure(e),
         })
     }
-    #[tool(
-        description = "Retrieve a stored composed SVG by the result id returned by compose_svg. Returns the full SVG markup for that composition. No network access.",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn get_composed(
-        &self,
-        Parameters(args): Parameters<GetComposedArgs>,
-    ) -> Result<CallToolResult, ErrorData> {
-        let lib = self.library.clone();
-        let result_id = args.result_id.clone();
-        Ok(match tokio::task::spawn_blocking(move || lib.get_composed(&result_id)).await {
-            Ok(Ok(svg)) => result(json!({"result_id": args.result_id, "svg": svg})),
-            Ok(Err(e)) => failure(e),
-            Err(e) => failure(e),
-        })
-    }
 }
 
 #[tool_handler(router = self.tool_router)]
@@ -217,8 +216,61 @@ impl ServerHandler for AssetServer {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(rmcp::model::Implementation::new("bio-assets", env!("CARGO_PKG_VERSION")))
-            .with_instructions("Search scientific visual primitives, then either retrieve an asset's SVG and compose it yourself, or use the deterministic composer. Recommended flow: search_assets -> get_asset (include_svg=false for metadata only, with source/view_box/width/height) -> compose_svg to place assets by id + x/y/scale/rotation (each anchored at its own viewBox origin; returns a result id, not markup) -> get_composed to fetch the full SVG. Preserve all returned license and attribution requirements. This service is offline and does not render or lay out figures beyond fixed geometry.")
+            .with_instructions("Search scientific visual primitives, then either retrieve an asset's SVG and compose it yourself, or use the deterministic composer. Recommended flow: search_assets -> get_asset (metadata by default, with source/view_box/width/height; set include_svg=true only for debugging) -> compose_svg to place assets by id + x/y/scale/rotation (each anchored at its own viewBox origin; returns a result_id and a relative url, never markup) -> perform a normal HTTP GET of the returned url to fetch the composed SVG (no MCP call). Preserve all returned license and attribution requirements. This service is offline and does not render or lay out figures beyond fixed geometry.")
     }
+}
+
+/// Serve a stored composed SVG for `GET /results/{name}`. `name` is the
+/// URL-decoded path segment and must be a well-formed `result_id` plus a `.svg`
+/// suffix; anything else (including traversal, extra path segments, absolute
+/// paths, or a bare `/results`) is a 404 with no existence disclosure. Only
+/// regular files inside `<root>/results/` are served.
+async fn result_artifact(
+    axum::extract::State(state): axum::extract::State<Library>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> axum::response::Response {
+    let not_found = || {
+        axum::response::Response::builder()
+            .status(axum::http::StatusCode::NOT_FOUND)
+            .body(axum::body::Body::empty())
+            .expect("valid 404 response")
+    };
+    let root = state.root.clone();
+    let bytes = match tokio::task::spawn_blocking(move || -> Result<Vec<u8>, ()> {
+        let Some(result_id) = name.strip_suffix(".svg") else {
+            return Err(());
+        };
+        if !crate::index::is_valid_result_id(result_id) {
+            return Err(());
+        }
+        let path = root.join("results").join(name);
+        if !path.is_file() {
+            return Err(());
+        }
+        let Ok(canonical) = path.canonicalize() else {
+            return Err(());
+        };
+        let Ok(root_canonical) = root.canonicalize() else {
+            return Err(());
+        };
+        if !canonical.starts_with(&root_canonical) {
+            return Err(());
+        }
+        std::fs::read(&canonical).map_err(|_| ())
+    })
+    .await
+    {
+        Ok(Ok(bytes)) => bytes,
+        _ => return not_found(),
+    };
+    axum::response::Response::builder()
+        .status(axum::http::StatusCode::OK)
+        .header(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("image/svg+xml"),
+        )
+        .body(axum::body::Body::from(bytes))
+        .expect("valid response")
 }
 
 pub async fn serve(library: Library, address: SocketAddr) -> Result<()> {
@@ -232,6 +284,7 @@ pub async fn serve(library: Library, address: SocketAddr) -> Result<()> {
     ));
 
     config.cancellation_token = cancel.child_token();
+    let state = library.clone();
     let service = StreamableHttpService::new(
         move || Ok(AssetServer::new(library.clone())),
         Arc::new(LocalSessionManager::default()),
@@ -239,7 +292,9 @@ pub async fn serve(library: Library, address: SocketAddr) -> Result<()> {
     );
     let router = axum::Router::new()
         .route("/health", axum::routing::get(|| async { "ok" }))
-        .nest_service("/mcp", service);
+        .route("/results/{name}", axum::routing::get(result_artifact))
+        .nest_service("/mcp", service)
+        .with_state(state);
     let listener = tokio::net::TcpListener::bind(address).await?;
     tracing::info!(%address,"MCP listening at /mcp");
     axum::serve(listener, router)
