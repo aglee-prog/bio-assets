@@ -9,6 +9,7 @@ services:
     environment:
       BIO_ASSETS_DATA: /data
       BIO_ASSETS_ALLOWED_HOSTS: host.docker.internal,bio-assets
+      BIO_ASSETS_PUBLIC_URL: http://192.168.0.10:8092
       RUST_LOG: bio_assets=info
     init: true
     restart: unless-stopped
