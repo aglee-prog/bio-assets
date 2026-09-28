@@ -190,7 +190,7 @@ impl AssetServer {
         })
     }
     #[tool(
-        description = "Deterministically place local assets by asset_id and x/y/scale/rotation onto a canvas. Each asset is anchored at its own viewBox origin; scaling is a transform (width/height stay the raw viewBox size). Returns a compact result (result_id plus a relative url) and never SVG markup. Fetch the composed SVG by performing a plain HTTP GET on the returned url (not an MCP call). Preserve every returned attribution. No network access.",
+        description = "Deterministically place local assets by asset_id and x/y/scale/rotation onto a canvas. Each asset is anchored at its own viewBox origin; scaling is a transform (width/height stay the raw viewBox size). Returns a compact result (status, result_id, url, mime_type, width, height) and never SVG markup; the url is the artifact location, relative by default and absolute when a public base URL is configured. After a successful composition, present the returned url to the user; do not fetch or inspect the generated SVG. No network access.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -216,7 +216,7 @@ impl ServerHandler for AssetServer {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(rmcp::model::Implementation::new("bio-assets", env!("CARGO_PKG_VERSION")))
-            .with_instructions("Search scientific visual primitives, then either retrieve an asset's SVG and compose it yourself, or use the deterministic composer. Recommended flow: search_assets -> get_asset (metadata by default, with source/view_box/width/height; set include_svg=true only for debugging) -> compose_svg to place assets by id + x/y/scale/rotation (each anchored at its own viewBox origin; returns a result_id and a relative url, never markup) -> perform a normal HTTP GET of the returned url to fetch the composed SVG (no MCP call). Preserve all returned license and attribution requirements. This service is offline and does not render or lay out figures beyond fixed geometry.")
+            .with_instructions("Search scientific visual primitives, then either retrieve an asset's SVG and compose it yourself, or use the deterministic composer. Recommended flow: search_assets -> get_asset (metadata by default, with source/view_box/width/height; set include_svg=true only for debugging) -> compose_svg to place assets by id + x/y/scale/rotation (each anchored at its own viewBox origin; returns a result_id and an artifact url, never markup) -> present the returned artifact url to the user; do not fetch or inspect the generated SVG. This service is offline and does not render or lay out figures beyond fixed geometry.")
     }
 }
 

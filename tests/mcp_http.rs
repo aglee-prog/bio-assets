@@ -197,8 +197,20 @@ async fn compose_svg_returns_compact_schema_and_http_serves_exact_bytes() {
     assert_eq!(data["mime_type"], "image/svg+xml");
     assert_eq!(data["width"], 100.0);
     assert_eq!(data["height"], 100.0);
-    assert_eq!(data["element_count"], 1);
-    assert!(data["attribution"].is_array(), "attribution must be an array");
+    let keys: std::collections::BTreeSet<&str> = data
+        .as_object()
+        .expect("compose result must be a JSON object")
+        .keys()
+        .map(|k| k.as_str())
+        .collect();
+    assert_eq!(
+        keys,
+        ["status", "result_id", "url", "mime_type", "width", "height"]
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>(),
+        "compose result must contain exactly the 6 contract keys"
+    );
+    assert_eq!(data["status"], "ok");
     // (A) no SVG markup anywhere in the MCP response
     for marker in ["<svg", "<path", "<symbol", "<use", "viewBox=\"0 0"] {
         assert!(!text.contains(marker), "MCP response must not contain {marker:?}: {text}");

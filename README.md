@@ -51,7 +51,7 @@ Four tools are exposed:
 | `search_assets` | `query`, optional `source`, `category`, `limit` (default 20, maximum 100) | Array of `{id,name,source,category,tags}` |
 | `get_asset` | `id`, optional `include_svg` (default `false`) | `{id,name,source,view_box,width,height,license,license_url,author,attribution,source_url}`; `svg` is included only when `include_svg` is explicitly `true` (debugging) |
 | `get_assets` | `ids` (1–100), optional `include_svg` (default `false`) | `{assets:[…],errors:[{id,code,message}]}`; `svg` is included only when `include_svg` is `true` |
-| `compose_svg` | `width`, `height`, optional `background`, `elements` (1–50; each `{asset_id,x,y,scale,rotation}`) | `{result_id,url,mime_type,width,height,element_count,attribution}` (no SVG markup) |
+| `compose_svg` | `width`, `height`, optional `background`, `elements` (1–50; each `{asset_id,x,y,scale,rotation}`) | `{status,result_id,url,mime_type,width,height}` (no SVG markup); `status` is `"ok"` on success |
 
 Composed SVG never travels through an MCP tool result. It is delivered through a
 read-only HTTP endpoint: `GET /results/{result_id}.svg` → `200` with
@@ -78,7 +78,9 @@ tool is unnecessary for the initial API.
 ## Composition
 
 The flow: `search_assets` → `get_asset` (metadata by default) → `compose_svg`
-→ `GET /results/{result_id}.svg` (plain HTTP, no MCP call).
+→ present the artifact `url` to the user. After a successful composition the
+caller presents the artifact URL; the generated SVG must not be fetched or
+inspected by the model.
 Each placed asset is anchored at its own `viewBox` origin; the transform is
 `translate·scale·rotate` about that origin, with scaling applied through the
 transform so `width` and `height` stay the raw (un-scaled) viewBox size.
@@ -94,8 +96,8 @@ Artifacts live in `results/{result_id}.svg` under the data directory
 `scale > 0`; `|rotation| ≤ 360`; canvas `width`/`height` finite and greater
 than zero; assembled SVG ≤ 16 MiB.
 
-Preserve every attribution returned by `compose_svg` when redistributing a
-composition.
+Present the artifact URL to the user; do not fetch or inspect the generated
+SVG.
 
 ## Sources and licensing
 
@@ -237,6 +239,10 @@ allowed `Host` names for the HTTP endpoint; bare names match any port on that
 host, and a name with a port matches that exact port. The local defaults
 (`localhost`, `127.0.0.1`, `::1`) are always kept and Host validation is never
 disabled, so unset or empty means local-only access.
+`BIO_ASSETS_PUBLIC_URL` sets a public base for artifact URLs; when set to a
+non-empty value, trailing slashes are stripped and URLs are absolute
+(`{base}/results/{result_id}.svg`), and when unset or blank they are relative
+(`/results/{result_id}.svg`). It is read on each `compose_svg` call.
 
 A local manifest is a JSON array. SVG paths are relative to the manifest and may
 not escape its directory (including through symlinks):

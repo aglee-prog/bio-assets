@@ -199,15 +199,18 @@ impl Library {
                 .join(format!("{result_id}.svg")),
             &svg,
         )?;
-        let attribution = compose::attribution(args, &resolve)?;
+        let binding = std::env::var("BIO_ASSETS_PUBLIC_URL").ok();
+        let public_url = binding
+            .as_deref()
+            .filter(|value| !value.trim().is_empty());
+        let url = artifact_url(&result_id, public_url);
         Ok(ComposeResult {
-            result_id: result_id.clone(),
-            url: format!("/results/{result_id}.svg"),
+            status: "ok".into(),
+            result_id,
+            url,
             mime_type: "image/svg+xml".into(),
             width: args.width,
             height: args.height,
-            element_count: args.elements.len(),
-            attribution,
         })
     }
 
@@ -259,6 +262,18 @@ pub fn is_valid_result_id(result_id: &str) -> bool {
         return false;
     };
     hex.len() == 16 && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// Absolute artifact URL for a composed result. When a non-blank `public_url`
+/// base is supplied it is prefixed (trailing `/` stripped); otherwise the
+/// relative server path is returned.
+pub fn artifact_url(result_id: &str, public_url: Option<&str>) -> String {
+    match public_url.map(str::trim) {
+        Some(base) if !base.is_empty() => {
+            format!("{}/results/{result_id}.svg", base.trim_end_matches('/'))
+        }
+        _ => format!("/results/{result_id}.svg"),
+    }
 }
 
 pub fn contained_path(root: &Path, path: &Path) -> Result<PathBuf> {
@@ -346,5 +361,54 @@ mod tests {
         assert_eq!(lib.search("nerve cell", None, None, 20).unwrap().len(), 1);
         assert_eq!(lib.count().unwrap(), 1);
         assert!(lib.search("\" OR *", None, None, 20).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod artifact_url_tests {
+    use super::artifact_url;
+
+    const ID: &str = "ba_comp_0123456789abcdef";
+
+    #[test]
+    fn none_is_relative() {
+        assert_eq!(artifact_url(ID, None), format!("/results/{ID}.svg"));
+    }
+
+    #[test]
+    fn empty_string_is_relative() {
+        assert_eq!(artifact_url(ID, Some("")), format!("/results/{ID}.svg"));
+    }
+
+    #[test]
+    fn whitespace_only_is_relative() {
+        assert_eq!(
+            artifact_url(ID, Some("   \t ")),
+            format!("/results/{ID}.svg")
+        );
+    }
+
+    #[test]
+    fn one_trailing_slash() {
+        assert_eq!(
+            artifact_url(ID, Some("https://example.com/")),
+            format!("https://example.com/results/{ID}.svg")
+        );
+    }
+
+    #[test]
+    fn multiple_trailing_slashes() {
+        assert_eq!(
+            artifact_url(ID, Some("https://example.com///")),
+            format!("https://example.com/results/{ID}.svg")
+        );
+    }
+
+    #[test]
+    fn no_trailing_slash() {
+        assert_eq!(
+            artifact_url(ID, Some("https://example.com")),
+            format!("https://example.com/results/{ID}.svg")
+        );
     }
 }

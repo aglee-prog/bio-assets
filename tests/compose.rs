@@ -437,9 +437,10 @@ fn attribution_deduped_first_seen_order() {
         ],
     };
     let result = lib.compose(&args).unwrap();
-    assert_eq!(
-        result.attribution,
-        vec!["Shared Author, CC0 1.0".to_string(), "Unique Author, CC-BY-4.0".to_string()],
-        "attribution must be the deduped first-seen union"
+    let svg = String::from_utf8(lib.read_result(&result.result_id).expect("stored artifact readable"))
+        .expect("composed SVG is UTF-8");
+    assert!(
+        svg.contains("<!-- attribution: Shared Author, CC0 1.0; Unique Author, CC-BY-4.0 -->"),
+        "attribution must be the deduped first-seen union; got: {svg}"
     );
 }

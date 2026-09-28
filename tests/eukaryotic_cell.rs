@@ -354,14 +354,23 @@ async fn eukaryotic_cell_end_to_end() {
     assert_eq!(compose_data["mime_type"].as_str().unwrap(), "image/svg+xml");
     assert_eq!(compose_data["width"].as_f64().unwrap(), 300.0);
     assert_eq!(compose_data["height"].as_f64().unwrap(), 200.0);
-    assert_eq!(compose_data["element_count"].as_u64().unwrap(), 3);
-    assert!(
-        compose_data["attribution"].is_array(),
-        "attribution must be a non-empty array"
+    let keys: std::collections::BTreeSet<&str> = compose_data
+        .as_object()
+        .expect("compose result must be a JSON object")
+        .keys()
+        .map(|k| k.as_str())
+        .collect();
+    assert_eq!(
+        keys,
+        ["status", "result_id", "url", "mime_type", "width", "height"]
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>(),
+        "compose result must contain exactly the 6 contract keys"
     );
-    assert!(
-        !compose_data["attribution"].as_array().unwrap().is_empty(),
-        "attribution must be non-empty"
+    assert_eq!(
+        compose_data["status"].as_str(),
+        Some("ok"),
+        "status must be ok"
     );
     // MCP response must not contain SVG markup.
     for marker in ["<svg", "<path", "<symbol", "<use", "<ellipse", "viewBox=\""] {
