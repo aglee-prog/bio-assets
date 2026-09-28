@@ -38,6 +38,10 @@ Clients supporting remote MCP should add the URL above as a Streamable HTTP
 server. The endpoint implements MCP initialization and discovery through the
 official Rust SDK; it is not a custom REST approximation of MCP.
 
+For a client such as OpenWebUI that reaches the service through the Docker host,
+the container is configured to allow the `Host` names `host.docker.internal` and
+`bio-assets` in addition to the local defaults.
+
 ## API
 
 Five tools are exposed:
@@ -217,6 +221,11 @@ cargo run -- serve --bind 127.0.0.1:8092
 
 The default local data directory is `storage/`; override it with `--data-dir` or
 `BIO_ASSETS_DATA`. `BIO_ASSETS_BIND` overrides the listening address.
+`BIO_ASSETS_ALLOWED_HOSTS` is an optional comma-separated list of additional
+allowed `Host` names for the HTTP endpoint; bare names match any port on that
+host, and a name with a port matches that exact port. The local defaults
+(`localhost`, `127.0.0.1`, `::1`) are always kept and Host validation is never
+disabled, so unset or empty means local-only access.
 
 A local manifest is a JSON array. SVG paths are relative to the manifest and may
 not escape its directory (including through symlinks):

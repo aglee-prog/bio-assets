@@ -226,7 +226,10 @@ pub async fn serve(library: Library, address: SocketAddr) -> Result<()> {
         StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
     };
     let cancel = tokio_util::sync::CancellationToken::new();
-    let mut config = StreamableHttpServerConfig::default().disable_allowed_hosts();
+    let mut config = StreamableHttpServerConfig::default();
+    config.allowed_hosts.extend(additional_allowed_hosts(
+        std::env::var("BIO_ASSETS_ALLOWED_HOSTS").ok().as_deref(),
+    ));
 
     config.cancellation_token = cancel.child_token();
     let service = StreamableHttpService::new(
@@ -254,4 +257,94 @@ pub async fn serve(library: Library, address: SocketAddr) -> Result<()> {
         })
         .await?;
     Ok(())
+}
+
+/// Parse the `BIO_ASSETS_ALLOWED_HOSTS` value into additional allowed `Host`
+/// names for the Streamable HTTP MCP transport.
+///
+/// This only *adds* to rmcp's built-in local allowlist (`localhost`,
+/// `127.0.0.1`, `::1`); it never disables `Host` header validation, and it never
+/// introduces a wildcard (`*`) or `0.0.0.0`. An entry may carry a port, in which
+/// case rmcp matches that exact `host:port`; a bare name matches any port on that
+/// host. Entries are passed through unchanged (no port stripping, no lowercasing,
+/// no normalization) so rmcp applies its own `host:port` semantics.
+///
+/// Split on commas, trim surrounding whitespace on each entry, drop empty entries,
+/// and preserve order and duplicates as given. `None` or blank input yields an
+/// empty list.
+pub fn additional_allowed_hosts(raw: Option<&str>) -> Vec<String> {
+    let Some(raw) = raw else {
+        return Vec::new();
+    };
+    raw.split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+#[cfg(test)]
+mod additional_allowed_hosts_tests {
+    use super::additional_allowed_hosts;
+
+    #[test]
+    fn none_is_empty() {
+        assert_eq!(additional_allowed_hosts(None), Vec::<String>::new());
+    }
+
+    #[test]
+    fn blank_is_empty() {
+        assert_eq!(additional_allowed_hosts(Some("")), Vec::<String>::new());
+        assert_eq!(additional_allowed_hosts(Some("   ")), Vec::<String>::new());
+    }
+
+    #[test]
+    fn single_entry() {
+        assert_eq!(
+            additional_allowed_hosts(Some("host.docker.internal")),
+            vec!["host.docker.internal".to_owned()]
+        );
+    }
+
+    #[test]
+    fn trims_whitespace_and_drops_trailing_empty() {
+        assert_eq!(
+            additional_allowed_hosts(Some(" a , b ,")),
+            vec!["a".to_owned(), "b".to_owned()]
+        );
+    }
+
+    #[test]
+    fn drops_internal_empty_entries() {
+        assert_eq!(
+            additional_allowed_hosts(Some("x,,y, z ,")),
+            vec!["x".to_owned(), "y".to_owned(), "z".to_owned()]
+        );
+    }
+
+    #[test]
+    fn preserves_port_verbatim() {
+        assert_eq!(
+            additional_allowed_hosts(Some("example.com:8080")),
+            vec!["example.com:8080".to_owned()]
+        );
+    }
+
+    #[test]
+    fn preserves_duplicates_and_order() {
+        assert_eq!(
+            additional_allowed_hosts(Some("b, a ,b")),
+            vec!["b".to_owned(), "a".to_owned(), "b".to_owned()]
+        );
+    }
+
+    #[test]
+    fn never_emits_wildcard_or_any_on_blank_input() {
+        for input in [None, Some(""), Some("   ")] {
+            let out = additional_allowed_hosts(input);
+            assert!(out.is_empty(), "blank input must yield no entries: {out:?}");
+            assert!(!out.contains(&"*".to_owned()), "must never emit `*`: {out:?}");
+            assert!(!out.contains(&"0.0.0.0".to_owned()), "must never emit 0.0.0.0: {out:?}");
+        }
+    }
 }

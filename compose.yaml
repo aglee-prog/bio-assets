@@ -8,6 +8,7 @@ services:
       - bio-assets-data:/data
     environment:
       BIO_ASSETS_DATA: /data
+      BIO_ASSETS_ALLOWED_HOSTS: host.docker.internal,bio-assets
       RUST_LOG: bio_assets=info
     init: true
     restart: unless-stopped
