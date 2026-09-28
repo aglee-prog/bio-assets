@@ -1,4 +1,7 @@
-use crate::index::Library;
+use crate::{
+    index::Library,
+    models::ComposeArgs,
+};
 use anyhow::Result;
 use rmcp::{
     ErrorData, ServerHandler,
@@ -30,6 +33,19 @@ fn default_limit() -> u32 {
 pub struct GetArgs {
     #[schemars(length(min = 1))]
     pub id: String,
+    /// Include the full SVG markup (default). Set false for metadata only.
+    #[serde(default = "default_true")]
+    pub include_svg: bool,
+}
+fn default_true() -> bool {
+    true
+}
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GetComposedArgs {
+    /// A `result_id` returned by `compose_svg`.
+    #[schemars(length(min = 1))]
+    pub result_id: String,
 }
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -103,14 +119,23 @@ impl AssetServer {
         Parameters(args): Parameters<GetArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         let lib = self.library.clone();
-        Ok(
-            match tokio::task::spawn_blocking(move || lib.get(&args.id)).await {
-                Ok(Ok(Some(asset))) => result(json!(asset)),
-                Ok(Ok(None)) => failure("ASSET_NOT_FOUND"),
-                Ok(Err(e)) => failure(e),
-                Err(e) => failure(e),
-            },
-        )
+        Ok(match tokio::task::spawn_blocking(move || -> anyhow::Result<Option<Value>> {
+            let Some(asset) = lib.get(&args.id)? else {
+                return Ok(None);
+            };
+            let mut value = serde_json::to_value(asset)?;
+            if !args.include_svg && let Some(object) = value.as_object_mut() {
+                object.remove("svg");
+            }
+            Ok(Some(value))
+        })
+        .await
+        {
+            Ok(Ok(Some(value))) => result(value),
+            Ok(Ok(None)) => failure("ASSET_NOT_FOUND"),
+            Ok(Err(e)) => failure(e),
+            Err(e) => failure(e),
+        })
     }
     #[tool(
         description = "Retrieve up to 100 local SVG primitives in one call. Returns assets in request order and explicit errors for missing items. Includes licensing and attribution for every asset. No network access.",
@@ -144,6 +169,47 @@ impl AssetServer {
             json!({"assets":assets,"errors":errors})
         }).await {Ok(v)=>result(v),Err(e)=>failure(e)})
     }
+    #[tool(
+        description = "Deterministically place local assets by asset_id and x/y/scale/rotation onto a canvas. Each asset is anchored at its own viewBox origin; scaling is a transform (width/height stay the raw viewBox size). Returns a compact result id, never SVG markup; retrieve it with get_composed. Preserve every returned attribution. No network access.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn compose_svg(
+        &self,
+        Parameters(args): Parameters<ComposeArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let lib = self.library.clone();
+        Ok(match tokio::task::spawn_blocking(move || lib.compose(&args)).await {
+            Ok(Ok(res)) => result(json!(res)),
+            Ok(Err(e)) => failure(e),
+            Err(e) => failure(e),
+        })
+    }
+    #[tool(
+        description = "Retrieve a stored composed SVG by the result id returned by compose_svg. Returns the full SVG markup for that composition. No network access.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn get_composed(
+        &self,
+        Parameters(args): Parameters<GetComposedArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let lib = self.library.clone();
+        let result_id = args.result_id.clone();
+        Ok(match tokio::task::spawn_blocking(move || lib.get_composed(&result_id)).await {
+            Ok(Ok(svg)) => result(json!({"result_id": args.result_id, "svg": svg})),
+            Ok(Err(e)) => failure(e),
+            Err(e) => failure(e),
+        })
+    }
 }
 
 #[tool_handler(router = self.tool_router)]
@@ -151,7 +217,7 @@ impl ServerHandler for AssetServer {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(rmcp::model::Implementation::new("bio-assets", env!("CARGO_PKG_VERSION")))
-            .with_instructions("Find a scientific visual primitive, retrieve its SVG, then compose the final SVG yourself. This service only searches and retrieves local assets. Preserve all returned license and attribution requirements. It does not render or lay out figures.")
+            .with_instructions("Search scientific visual primitives, then either retrieve an asset's SVG and compose it yourself, or use the deterministic composer. Recommended flow: search_assets -> get_asset (include_svg=false for metadata only, with source/view_box/width/height) -> compose_svg to place assets by id + x/y/scale/rotation (each anchored at its own viewBox origin; returns a result id, not markup) -> get_composed to fetch the full SVG. Preserve all returned license and attribution requirements. This service is offline and does not render or lay out figures beyond fixed geometry.")
     }
 }
 

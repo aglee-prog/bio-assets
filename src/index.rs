@@ -1,8 +1,9 @@
 use crate::{
-    models::{Asset, AssetContent, AssetSummary},
+    compose,
+    models::{Asset, AssetContent, AssetSummary, ComposeArgs, ComposeResult, PlacedAsset},
     svg,
 };
-use anyhow::{Context, Result, ensure};
+use anyhow::{bail, Context, Result, ensure};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde_json::{Value, json};
 use std::{
@@ -21,7 +22,7 @@ impl Library {
         Self { root: root.into() }
     }
     pub fn initialize(&self) -> Result<()> {
-        for dir in ["assets", "data/manifests", "data/normalized", "cache"] {
+        for dir in ["assets", "data/manifests", "data/normalized", "data/composed", "cache"] {
             fs::create_dir_all(self.root.join(dir))?;
         }
         let db = Connection::open(self.root.join("data/assets.sqlite"))?;
@@ -138,16 +139,119 @@ impl Library {
 
     pub fn get(&self, id: &str) -> Result<Option<AssetContent>> {
         let db = self.connect(false)?;
-        let result = db.query_row("SELECT id,name,reusable_path,license,license_url,author,attribution,source_url FROM assets WHERE id=?", [id], |r| {
-            Ok((AssetContent {id:r.get(0)?,name:r.get(1)?,svg:String::new(),license:r.get(3)?,license_url:r.get(4)?,author:r.get(5)?,attribution:r.get(6)?,source_url:r.get(7)?},r.get::<_,String>(2)?))
-        }).optional()?;
+        let result = db
+            .query_row(
+                "SELECT id,name,source,reusable_path,license,license_url,author,attribution,source_url FROM assets WHERE id=?",
+                [id],
+                |r| {
+                    Ok((
+                        AssetContent {
+                            id: r.get(0)?,
+                            name: r.get(1)?,
+                            source: r.get(2)?,
+                            svg: String::new(),
+                            view_box: [0.0; 4],
+                            width: 0.0,
+                            height: 0.0,
+                            license: r.get(4)?,
+                            license_url: r.get(5)?,
+                            author: r.get(6)?,
+                            attribution: r.get(7)?,
+                            source_url: r.get(8)?,
+                        },
+                        r.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .optional()?;
         result
             .map(|(mut asset, path)| {
                 asset.svg = fs::read_to_string(contained_path(&self.root, Path::new(&path))?)?;
+                let view_box = view_box_of(&asset.svg)?;
+                asset.view_box = view_box;
+                asset.width = view_box[2];
+                asset.height = view_box[3];
                 Ok(asset)
             })
             .transpose()
     }
+
+    /// Deterministically compose placed assets: resolve them, build the SVG, and
+    /// write it to `data/composed/{result_id}.svg`. Fails before writing if any
+    /// asset is missing or invalid (all-or-nothing).
+    pub fn compose(&self, args: &ComposeArgs) -> Result<ComposeResult> {
+        let resolve = |asset_id: &str| -> Result<PlacedAsset> {
+            let Some(asset) = self.get(asset_id)? else {
+                bail!("asset not found: {asset_id}");
+            };
+            Ok(PlacedAsset {
+                asset_id: asset.id,
+                svg: asset.svg,
+                view_box: asset.view_box,
+                attribution: asset.attribution,
+            })
+        };
+        let (result_id, svg) = compose::compose(args, &resolve)?;
+        atomic_write(
+            &self
+                .root
+                .join("data/composed")
+                .join(format!("{result_id}.svg")),
+            &svg,
+        )?;
+        let attribution = compose::attribution(args, &resolve)?;
+        Ok(ComposeResult {
+            result_id,
+            width: args.width,
+            height: args.height,
+            element_count: args.elements.len(),
+            attribution,
+        })
+    }
+
+    /// Return the stored composed SVG for a `result_id` produced by `compose`.
+    pub fn get_composed(&self, result_id: &str) -> Result<String> {
+        ensure!(
+            result_id.starts_with("ba_comp_") && result_id.len() == "ba_comp_".len() + 16,
+            "invalid result id"
+        );
+        ensure!(
+            result_id
+                .chars()
+                .skip("ba_comp_".len())
+                .all(|c| c.is_ascii_hexdigit()),
+            "invalid result id"
+        );
+        let path = contained_path(
+            &self.root,
+            Path::new(&format!("data/composed/{result_id}.svg")),
+        )?;
+        Ok(fs::read_to_string(path)?)
+    }
+}
+
+/// Parse the root `viewBox` of a normalized asset. `svg::prepare` guarantees a
+/// valid `viewBox` is present, so this is a minimal, on-demand read (no column).
+fn view_box_of(svg: &str) -> Result<[f64; 4]> {
+    let root = xmltree::Element::parse(svg.as_bytes()).context("normalized SVG is not valid XML")?;
+    let view_box = root
+        .attributes
+        .get("viewBox")
+        .context("normalized SVG is missing viewBox")?;
+    let parts = view_box
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|s| !s.is_empty())
+        .map(str::parse::<f64>)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .context("invalid viewBox")?;
+    ensure!(
+        parts.len() == 4
+            && parts.iter().all(|n| n.is_finite())
+            && parts[2] > 0.0
+            && parts[3] > 0.0,
+        "invalid viewBox"
+    );
+    Ok([parts[0], parts[1], parts[2], parts[3]])
 }
 
 pub fn contained_path(root: &Path, path: &Path) -> Result<PathBuf> {

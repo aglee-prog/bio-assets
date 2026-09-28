@@ -91,3 +91,46 @@ each require guessing at behavior or fetching resources.
 Inert `path-effect="#..."`-style attributes may remain on elements. These are
 unknown attributes with no render effect; only the `inkscape:path-effect` elements
 themselves are removed.
+
+# Deterministic SVG composition (`compose_svg` / `get_composed`)
+
+## Goal
+
+Deterministic `compose_svg` + `get_composed` so the LLM places assets by
+`asset_id` + `x/y/scale/rotation` instead of transporting raw SVG.
+
+## Decisions
+
+- `<symbol>` + `<use>` wrap is safe on this corpus: 0 external refs, 0
+  `<script>`, 0 `foreignObject`, all `<image>` are `data:`, no self-references
+  in the 806 assets that have a root `<svg id>`.
+- Every `<use>` must set `width` and `height` to the asset's raw viewBox size;
+  scaling is applied through the transform, not by inflating `width`/`height`.
+- Fixed transform order `translate·scale·rotate` about the viewBox origin.
+- String-embedding of already-normalized markup inside `<symbol>…</symbol>`
+  (not xmltree re-emit); the normalized asset string is already fully namespaced
+  and validated.
+- All-or-nothing: missing asset ⇒ error, no file written.
+- Determinism via `serde_json::to_string` canonical hash → `result_id`
+  (`ba_comp_` + first 16 hex chars).
+- `view_box` / `width` / `height` parsed from the normalized SVG at `get` time
+  (no DB column).
+- `include_svg` is a serialization concern (default `true` keeps the old shape;
+  `false` strips `svg` but retains `source`/`view_box`/`width`/`height`).
+
+## Verification
+
+- `cargo build --locked`
+- `cargo test --locked` (now 5 tools incl. `tests/compose.rs` + extended
+  `tests/mcp_http.rs`)
+- `cargo clippy --all-targets --all-features -- -D warnings`
+
+## Known residue
+
+When the SAME asset is placed more than once, its internal (asset-owned) ids are
+duplicated in the output because markup is string-embedded verbatim. Symbol ids
+are always unique and browsers resolve duplicate internal ids to the first copy,
+which is visually identical — accepted as a property of string-embedding, not a
+defect.
+
+NIAID/SciDraw end-to-end needs network (smoke check only, not a gate).

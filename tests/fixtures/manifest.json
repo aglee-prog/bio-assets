@@ -1,0 +1,58 @@
+[
+  {
+    "asset_id": "bioicons:cc-0/Animals/Bilyana-Popova/drosophila_fruit_fly",
+    "file": "drosophila.svg",
+    "construct": "nested <use> (a use whose target contains another use) + userSpaceOnUse gradients",
+    "view_box": [0, 0, 87.250275, 57.982422],
+    "license": "CC0-1.0"
+  },
+  {
+    "asset_id": "bioicons:cc-0/Animals/Ewa-Oz/Celegans",
+    "file": "celegans.svg",
+    "construct": "<clipPath> elements referenced via clip-path url()",
+    "view_box": [0, 0, 200, 200],
+    "license": "CC0-1.0"
+  },
+  {
+    "asset_id": "bioicons:cc-0/Lab_apparatus/Xavax/1000_ml_Erlenmeyer_flask",
+    "file": "erlenmeyer.svg",
+    "construct": "negative/non-zero viewBox origin",
+    "view_box": [-120.5, -155.297, 880.8, 532.8],
+    "license": "CC0-1.0"
+  },
+  {
+    "asset_id": "bioicons:cc-0/Animals/James-Lloyd/FruitFly",
+    "file": "fruit-fly.svg",
+    "construct": "<style> block with namespaced class rules",
+    "view_box": [0, 0, 612, 792],
+    "license": "CC0-1.0"
+  },
+  {
+    "asset_id": "bioicons:cc-0/Chemistry/OpenClipart/bottles-translucent-2d",
+    "file": "bottles.svg",
+    "construct": "<filter> elements referenced via filter url()",
+    "view_box": [0, 0, 108.795, 110.184],
+    "license": "CC0-1.0"
+  },
+  {
+    "asset_id": "bioicons:cc-0/Human_physiology/Jan-Clusmann/cirrhotic_liver",
+    "file": "cirrhotic-liver.svg",
+    "construct": "<pattern> elements referenced via url()",
+    "view_box": [0, 0, 210, 180],
+    "license": "CC0-1.0"
+  },
+  {
+    "asset_id": "bioicons:cc-0/Lab_apparatus/OpenClipart/spatula-side",
+    "file": "spatula-side.svg",
+    "construct": "plain paths (baseline)",
+    "view_box": [0, 0, 110.335, 1.871],
+    "license": "CC0-1.0"
+  },
+  {
+    "asset_id": "test:mask-synthetic",
+    "file": "mask-synthetic.svg",
+    "construct": "<mask> element referenced via mask url() from a rect and a path",
+    "view_box": [0, 0, 100, 100],
+    "license": "synthetic"
+  }
+]

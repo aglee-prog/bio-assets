@@ -40,13 +40,15 @@ official Rust SDK; it is not a custom REST approximation of MCP.
 
 ## API
 
-Exactly three tools are exposed:
+Five tools are exposed:
 
 | Tool | Arguments | Result |
 | --- | --- | --- |
 | `search_assets` | `query`, optional `source`, `category`, `limit` (default 20, maximum 100) | Array of `{id,name,source,category,tags}` |
-| `get_asset` | `id` | `{id,name,svg,license,license_url,author,attribution,source_url}` |
+| `get_asset` | `id`, optional `include_svg` (default `true`) | `{id,name,source,view_box,width,height,license,license_url,author,attribution,source_url}`; `svg` is omitted when `include_svg` is `false` |
 | `get_assets` | `ids` (1–100) | `{assets:[…],errors:[{id,code,message}]}` |
+| `compose_svg` | `width`, `height`, optional `background`, `elements` (1–50; each `{asset_id,x,y,scale,rotation}`) | `{result_id,width,height,element_count,attribution}` (no SVG markup) |
+| `get_composed` | `result_id` | `{result_id,svg}` (the full composed SVG) |
 
 Batch successes retain request order, including repeated IDs. Missing or unreadable
 items produce explicit errors; they do not trigger remote lookups. A batch is
@@ -61,6 +63,25 @@ not an ontology. Broad aliases do not reclassify every membrane receptor as RTK.
 
 Each tool supplies attribution metadata with the asset; an extra attribution
 tool is unnecessary for the initial API.
+
+## Composition
+
+The flow: `search_assets` → `get_asset` (metadata) → `compose_svg` → `get_composed`.
+Each placed asset is anchored at its own `viewBox` origin; the transform is
+`translate·scale·rotate` about that origin, with scaling applied through the
+transform so `width` and `height` stay the raw (un-scaled) viewBox size.
+Negative and non-zero origins are preserved.
+
+Identical compose arguments always produce the same `result_id` and the same
+stored bytes (canonical `serde_json::to_string` hash → `ba_comp_` prefix +
+first 16 hex chars). `get_composed` is idempotent.
+
+Artifacts live in `data/composed/{result_id}.svg`. Limits: 1–50 elements per
+composition; `scale > 0`; `|rotation| ≤ 360`; canvas `width`/`height` finite
+and greater than zero; assembled SVG ≤ 16 MiB.
+
+Preserve every attribution returned by `compose_svg` when redistributing a
+composition.
 
 ## Sources and licensing
 
@@ -138,6 +159,7 @@ assets/
   scidraw/<asset-key>/<content-hash>.svg
 data/
   assets.sqlite
+  composed/{result_id}.svg
   manifests/<source>/
   normalized/<asset-key>/<content-hash>.svg
 cache/
@@ -226,7 +248,9 @@ docker compose run --rm -v /absolute/export:/import:ro bio-assets \
 ```
 
 The integration test starts the real HTTP MCP transport, initializes a client,
-lists exactly three tools, searches, retrieves an SVG with credits, exercises
+lists exactly five tools, searches, retrieves an SVG with credits, exercises
 partial batch failure, and checks argument validation using locally generated
 fixtures. Other tests cover FTS updates, aliases, source filters, SVG reference
-rewriting, unsafe inputs, NIAID variants, and SciDraw coauthors.
+rewriting, unsafe inputs, NIAID variants, and SciDraw coauthors. The `compose`
+test drives a composition round-trip (compose then retrieve) and extends the
+HTTP tests with `include_svg` checks on `get_asset`.
