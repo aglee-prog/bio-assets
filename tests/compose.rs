@@ -1,6 +1,6 @@
 use bio_assets::{
     index::Library,
-    models::{Asset, ComposeArgs, ComposeElement},
+    models::{Asset, AssetElement, ComposeArgs, ComposeElement},
 };
 use serde_json::json;
 use std::fs;
@@ -59,13 +59,13 @@ fn new_harness() -> Harness {
 }
 
 fn elem(asset_id: &str, x: f64, y: f64, scale: f64, rotation: f64) -> ComposeElement {
-    ComposeElement {
+    ComposeElement::Asset(AssetElement {
         asset_id: asset_id.into(),
         x,
         y,
         scale,
         rotation,
-    }
+    })
 }
 
 fn single(asset_id: &str) -> ComposeArgs {

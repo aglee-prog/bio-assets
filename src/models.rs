@@ -50,11 +50,24 @@ pub struct AssetContent {
     pub source_url: String,
 }
 
-/// One placed asset inside a composition: an asset id plus its placement
-/// anchored at the asset's viewBox origin.
+/// One scene element: either a placed asset or a native text/line/rect/circle.
+/// Untagged, so existing asset-only JSON (no `type` key) still deserializes;
+/// the variant is disambiguated by which required fields are present.
+#[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(untagged)]
+pub enum ComposeElement {
+    Asset(AssetElement),
+    Text(TextElement),
+    Line(LineElement),
+    Rect(RectElement),
+    Circle(CircleElement),
+}
+
+/// A placed asset: an asset id plus its placement anchored at the asset's
+/// viewBox origin.
 #[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct ComposeElement {
+pub struct AssetElement {
     pub asset_id: String,
     pub x: f64,
     pub y: f64,
@@ -63,12 +76,81 @@ pub struct ComposeElement {
     #[serde(default)]
     pub rotation: f64,
 }
+/// A native text element anchored at (x, y).
+#[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TextElement {
+    pub text: String,
+    pub x: f64,
+    pub y: f64,
+    #[serde(default = "default_font_size")]
+    pub font_size: f64,
+    #[serde(default = "default_anchor")]
+    pub anchor: String,
+    #[serde(default)]
+    pub fill: Option<String>,
+}
+/// A native line from (x1, y1) to (x2, y2); `arrow_end` adds a chevron at (x2, y2).
+#[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LineElement {
+    pub x1: f64,
+    pub y1: f64,
+    pub x2: f64,
+    pub y2: f64,
+    #[serde(default = "default_width")]
+    pub width: f64,
+    #[serde(default)]
+    pub stroke: Option<String>,
+    #[serde(default)]
+    pub arrow_end: bool,
+}
+/// A native rectangle; `fill` and `stroke` are emitted only when present.
+#[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RectElement {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    #[serde(default)]
+    pub rx: f64,
+    #[serde(default)]
+    pub fill: Option<String>,
+    #[serde(default)]
+    pub stroke: Option<String>,
+    #[serde(default = "default_width")]
+    pub stroke_width: f64,
+}
+/// A native circle; `fill` and `stroke` are emitted only when present.
+#[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CircleElement {
+    pub cx: f64,
+    pub cy: f64,
+    pub r: f64,
+    #[serde(default)]
+    pub fill: Option<String>,
+    #[serde(default)]
+    pub stroke: Option<String>,
+    #[serde(default = "default_width")]
+    pub stroke_width: f64,
+}
 fn default_scale() -> f64 {
+    1.0
+}
+fn default_font_size() -> f64 {
+    12.0
+}
+fn default_anchor() -> String {
+    "start".into()
+}
+fn default_width() -> f64 {
     1.0
 }
 
 /// A deterministic composition request: a canvas plus an ordered list of
-/// placed assets.
+/// elements.
 #[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ComposeArgs {

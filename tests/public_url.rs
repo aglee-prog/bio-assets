@@ -1,6 +1,6 @@
 use bio_assets::{
     index::Library,
-    models::{Asset, ComposeArgs, ComposeElement},
+    models::{Asset, AssetElement, ComposeArgs, ComposeElement},
 };
 use serde_json::json;
 use std::fs;
@@ -61,13 +61,13 @@ fn single(asset_id: &str) -> ComposeArgs {
         width: 100.0,
         height: 100.0,
         background: None,
-        elements: vec![ComposeElement {
+        elements: vec![ComposeElement::Asset(AssetElement {
             asset_id: asset_id.into(),
             x: 0.0,
             y: 0.0,
             scale: 1.0,
             rotation: 0.0,
-        }],
+        })],
     }
 }
 

@@ -51,7 +51,7 @@ Four tools are exposed:
 | `search_assets` | `query`, optional `source`, `category`, `limit` (default 20, maximum 100) | Array of `{id,name,source,category,tags}` |
 | `get_asset` | `id`, optional `include_svg` (default `false`) | `{id,name,source,view_box,width,height,license,license_url,author,attribution,source_url}`; `svg` is included only when `include_svg` is explicitly `true` (debugging) |
 | `get_assets` | `ids` (1–100), optional `include_svg` (default `false`) | `{assets:[…],errors:[{id,code,message}]}`; `svg` is included only when `include_svg` is `true` |
-| `compose_svg` | `width`, `height`, optional `background`, `elements` (1–50; each `{asset_id,x,y,scale,rotation}`) | `{status,result_id,url,mime_type,width,height}` (no SVG markup); `status` is `"ok"` on success |
+| `compose_svg` | `width`, `height`, optional `background`, `elements` (1–50; each an asset `{asset_id,x,y,scale,rotation}` or a native `text`/`line`/`rect`/`circle`, an untagged union by required fields) | `{status,result_id,url,mime_type,width,height}` (no SVG markup); `status` is `"ok"` on success |
 
 Composed SVG never travels through an MCP tool result. It is delivered through a
 read-only HTTP endpoint: `GET /results/{result_id}.svg` → `200` with
@@ -84,7 +84,9 @@ inspected by the model.
 Each placed asset is anchored at its own `viewBox` origin; the transform is
 `translate·scale·rotate` about that origin, with scaling applied through the
 transform so `width` and `height` stay the raw (un-scaled) viewBox size.
-Negative and non-zero origins are preserved.
+Negative and non-zero origins are preserved. Elements may also be native
+`text`, `line`, `rect`, or `circle`, which render as native SVG with sensible
+defaults.
 
 Identical compose arguments always produce the same `result_id` and the same
 stored bytes. `result_id` is content-addressed: `ba_comp_` prefix + first 16
